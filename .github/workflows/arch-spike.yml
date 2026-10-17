@@ -29,6 +29,13 @@ jobs:
           git clone https://github.com/ktock/qemu-wasm.git qemu-wasm
           git -C qemu-wasm checkout "$QEMU_WASM_COMMIT"
 
+      - name: Patch the qemu-wasm Dockerfile (zlib.net no longer hosts zlib 1.3.1)
+        run: |
+          mkdir -p report
+          sed -i 's|https://zlib.net/zlib-$ZLIB_VERSION.tar.xz|https://github.com/madler/zlib/releases/download/v$ZLIB_VERSION/zlib-$ZLIB_VERSION.tar.xz|' qemu-wasm/Dockerfile
+          grep -n 'zlib' qemu-wasm/Dockerfile | head -5
+          grep -q 'github.com/madler/zlib' qemu-wasm/Dockerfile
+
       - name: Build the emscripten build container
         run: docker build -t buildqemu - < qemu-wasm/Dockerfile
 
