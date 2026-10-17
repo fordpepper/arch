@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Arch spike</title>
+<link rel="stylesheet" href="./vendor/xterm.css">
+<style>html,body{margin:0;background:#000}</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="./load.js"></script>
+<script src="./vendor/xterm.js"></script>
+<script src="./vendor/xterm-pty.js"></script>
+<script src="./module.js"></script>
+<script type="module">
+  import initEmscriptenModule from './out.js';
+  const term = new Terminal({ cols: 100, rows: 30, scrollback: 5000 });
+  window.term = term;                       // the CI test reads the screen from here
+  term.open(document.getElementById('terminal'));
+  const { master, slave } = openpty();
+  term.loadAddon(master);
+  Module.pty = slave;
+  Module['mainScriptUrlOrBlob'] = location.origin + '/out.js';
+  window.__t0 = performance.now();
+  (async () => {
+    const instance = await initEmscriptenModule(Module);
+    const oldPoll = Module['TTY'].stream_ops.poll;
+    const pty = Module['pty'];
+    Module['TTY'].stream_ops.poll = function (stream, timeout) {
+      if (!pty.readable) return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+      return oldPoll.call(stream, timeout);
+    };
+  })();
+</script>
+</body>
+</html>
