@@ -45,7 +45,16 @@ ln -sf ../run/systemd/resolve/stub-resolv.conf /out/root/etc/resolv.conf
 # Kernel + the "fallback" initramfs (it contains all drivers, e.g. virtio_blk)
 ls -la /out/root/boot || true
 cp /out/root/boot/vmlinuz-linux /out/vmlinuz
-cp /out/root/boot/initramfs-linux-fallback.img /out/initramfs.img
+# Current Arch ships only the 'default' preset; older ones also had 'fallback'.
+# Inside a container autodetect cannot trim the image, so it keeps all drivers either way.
+if [ -e /out/root/boot/initramfs-linux-fallback.img ]; then
+  cp /out/root/boot/initramfs-linux-fallback.img /out/initramfs.img
+else
+  cp /out/root/boot/initramfs-linux.img /out/initramfs.img
+fi
+# Report whether the virtio disk driver is inside the initramfs (informational only)
+n=$( (zstd -dc /out/initramfs.img 2>/dev/null || cat /out/initramfs.img) | (cpio -t 2>/dev/null || true) | grep -c 'virtio_blk' || true )
+echo "virtio_blk entries in initramfs: ${n:-0}"
 # /boot is not needed inside the disk image because qemu loads the kernel directly
 rm -f /out/root/boot/initramfs-linux*.img
 echo "ROOTFS_DONE"
