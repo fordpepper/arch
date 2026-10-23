@@ -1,0 +1,141 @@
+name: arch-snapshot
+on:
+  workflow_dispatch:
+    inputs:
+      trim:
+        description: "Skip man pages/docs/translations to shrink the image (1 = yes, 0 = stock)"
+        default: "1"
+      boot_timeout_min:
+        description: "Minutes to wait for the browser to resume the snapshot"
+        default: "30"
+
+env:
+  QEMU_WASM_COMMIT: 0ef7b4e2814b231705d8371dd7997f5b72e70baf
+
+jobs:
+  spike:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Get qemu-wasm (pinned)
+        run: |
+          git clone https://github.com/ktock/qemu-wasm.git qemu-wasm
+          git -C qemu-wasm checkout "$QEMU_WASM_COMMIT"
+
+      - name: Patch the qemu-wasm Dockerfile (zlib.net no longer hosts zlib 1.3.1)
+        run: |
+          mkdir -p report
+          sed -i 's|https://zlib.net/zlib-$ZLIB_VERSION.tar.xz|https://github.com/madler/zlib/releases/download/v$ZLIB_VERSION/zlib-$ZLIB_VERSION.tar.xz|' qemu-wasm/Dockerfile
+          grep -n 'zlib' qemu-wasm/Dockerfile | head -5
+          grep -q 'github.com/madler/zlib' qemu-wasm/Dockerfile
+
+      - name: Build the emscripten build container
+        run: docker build -t buildqemu - < qemu-wasm/Dockerfile
+
+      - name: Build qemu-system-x86_64 as WebAssembly
+        run: |
+          docker run --rm -d --name build-qemu-wasm -v "$PWD/qemu-wasm:/qemu/" buildqemu
+          docker exec build-qemu-wasm git config --global --add safe.directory "*"
+          EXTRA_CFLAGS="-O3 -g -Wno-error=unused-command-line-argument -matomics -mbulk-memory -DNDEBUG -DG_DISABLE_ASSERT -D_GNU_SOURCE -sASYNCIFY=1 -pthread -sPROXY_TO_PTHREAD=1 -sFORCE_FILESYSTEM -sALLOW_TABLE_GROWTH -sTOTAL_MEMORY=2300MB -sWASM_BIGINT -sMALLOC=mimalloc --js-library=/build/node_modules/xterm-pty/emscripten-pty.js -sEXPORT_ES6=1 -sASYNCIFY_IMPORTS=ffi_call_js"
+          docker exec build-qemu-wasm emconfigure /qemu/configure --static --target-list=x86_64-softmmu --cpu=wasm32 --cross-prefix= \
+            --without-default-features --enable-system --with-coroutine=fiber --enable-virtfs \
+            --extra-cflags="$EXTRA_CFLAGS" --extra-cxxflags="$EXTRA_CFLAGS" \
+            --extra-ldflags="-sEXPORTED_RUNTIME_METHODS=getTempRet0,setTempRet0,addFunction,removeFunction,TTY,FS"
+          docker exec build-qemu-wasm emmake make -j"$(nproc)" qemu-system-x86_64
+          docker exec build-qemu-wasm ls -la /build/qemu-system-x86_64 /build/qemu-system-x86_64.wasm /build/qemu-system-x86_64.worker.js
+
+      - name: Build the stock Arch Linux root filesystem (official archlinux image)
+        run: |
+          mkdir -p out
+          docker run --rm --privileged -e TRIM="${{ inputs.trim }}" \
+            -v "$PWD/out:/out" -v "$PWD/scripts:/scripts:ro" \
+            archlinux:latest bash /scripts/build-arch-rootfs.sh
+          sudo du -sm out/root | tee out/rootfs-installed-mb.txt
+          MB=$(cut -f1 out/rootfs-installed-mb.txt)
+          SIZE=$(( MB * 12 / 10 + 64 ))
+          sudo mke2fs -q -t ext4 -d out/root -F -L archroot out/rootfs.img "${SIZE}M"
+          sudo chown -R "$USER" out
+          ls -la out
+
+      - name: Build NATIVE QEMU from the same source (used only to make the snapshot)
+        run: |
+          sudo chown -R "$USER" qemu-wasm
+          git config --global --add safe.directory '*'
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev python3-venv flex bison git
+          mkdir native-build && cd native-build
+          ../qemu-wasm/configure --target-list=x86_64-softmmu --without-default-features \
+            --enable-system --enable-tcg --disable-docs
+          make -j"$(nproc)" qemu-system-x86_64
+          ls -la qemu-system-x86_64
+
+      - name: Boot Arch natively, save the machine state, test restore natively
+        continue-on-error: true
+        run: |
+          mkdir -p report
+          python3 scripts/native-snapshot.py
+          {
+            echo "## Native boot + snapshot"
+            echo '```'
+            cat report/native-snapshot.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package the snapshot for the browser
+        run: |
+          test -s out/state.bin
+          mkdir -p pack site/vendor report
+          cp out/vmlinuz out/initramfs.img pack/
+          cp out/rootfs-snap.img pack/rootfs.img
+          cp out/state.bin pack/state.bin
+          cp qemu-wasm/pc-bios/{bios-256k.bin,vgabios-stdvga.bin,kvmvapic.bin,linuxboot_dma.bin} pack/
+          docker cp pack build-qemu-wasm:/pack
+          docker exec build-qemu-wasm /bin/sh -c "cd /build && /emsdk/upstream/emscripten/tools/file_packager.py qemu-system-x86_64.data --preload /pack > load.js"
+          docker cp build-qemu-wasm:/build/qemu-system-x86_64 site/out.js
+          for f in qemu-system-x86_64.wasm qemu-system-x86_64.worker.js qemu-system-x86_64.data load.js; do
+            docker cp build-qemu-wasm:/build/$f site/$f
+          done
+          cp web/index.html site/
+          cp web/module-snap.js site/module.js
+          npm install --no-audit --no-fund xterm@5.3.0 xterm-pty@0.10.1
+          cp node_modules/xterm/lib/xterm.js site/vendor/xterm.js
+          cp node_modules/xterm/css/xterm.css site/vendor/xterm.css
+          cp node_modules/xterm-pty/index.js site/vendor/xterm-pty.js
+          {
+            echo "## Sizes"
+            echo '```'
+            ls -l --block-size=1M pack | awk 'NR>1{printf "%-28s %s MB\n",$9,$5}'
+            ls -l --block-size=1M site | awk 'NR>1{printf "site/%-23s %s MB\n",$9,$5}'
+            echo '```'
+          } | tee report/sizes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Headless Chrome - resume the snapshot in the browser build
+        continue-on-error: true
+        env:
+          MODE: snapshot
+          BOOT_TIMEOUT_MIN: ${{ inputs.boot_timeout_min }}
+        run: |
+          npm install --no-audit --no-fund playwright
+          npx playwright install --with-deps chromium
+          node scripts/ci-boot-test.mjs site 2>&1 | tee report/browser-restore.log
+          {
+            echo "## Browser restore test (headless Chromium, runner CPU)"
+            echo '```'
+            tail -60 report/browser-restore.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-snapshot-report
+          retention-days: 7
+          path: report/
