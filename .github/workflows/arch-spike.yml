@@ -1,4 +1,4 @@
-name: arch-spike
+name: arch-snapshot
 on:
   workflow_dispatch:
     inputs:
@@ -6,8 +6,8 @@ on:
         description: "Skip man pages/docs/translations to shrink the image (1 = yes, 0 = stock)"
         default: "1"
       boot_timeout_min:
-        description: "Minutes to wait for the Arch login prompt"
-        default: "40"
+        description: "Minutes to wait for the browser to resume the snapshot"
+        default: "30"
 
 env:
   QEMU_WASM_COMMIT: 0ef7b4e2814b231705d8371dd7997f5b72e70baf
@@ -64,10 +64,37 @@ jobs:
           sudo chown -R "$USER" out
           ls -la out
 
-      - name: Package for the browser
+      - name: Build NATIVE QEMU from the same source (used only to make the snapshot)
         run: |
+          sudo chown -R "$USER" qemu-wasm
+          git config --global --add safe.directory '*'
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev python3-venv flex bison git
+          mkdir native-build && cd native-build
+          ../qemu-wasm/configure --target-list=x86_64-softmmu --without-default-features \
+            --enable-system --enable-tcg --disable-docs
+          make -j"$(nproc)" qemu-system-x86_64
+          ls -la qemu-system-x86_64
+
+      - name: Boot Arch natively, save the machine state, test restore natively
+        continue-on-error: true
+        run: |
+          mkdir -p report
+          python3 scripts/native-snapshot.py
+          {
+            echo "## Native boot + snapshot"
+            echo '```'
+            cat report/native-snapshot.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package the snapshot for the browser
+        run: |
+          test -s out/state.bin
           mkdir -p pack site/vendor report
-          cp out/vmlinuz out/initramfs.img out/rootfs.img pack/
+          cp out/vmlinuz out/initramfs.img pack/
+          cp out/rootfs-snap.img pack/rootfs.img
+          cp out/state.bin pack/state.bin
           cp qemu-wasm/pc-bios/{bios-256k.bin,vgabios-stdvga.bin,kvmvapic.bin,linuxboot_dma.bin} pack/
           docker cp pack build-qemu-wasm:/pack
           docker exec build-qemu-wasm /bin/sh -c "cd /build && /emsdk/upstream/emscripten/tools/file_packager.py qemu-system-x86_64.data --preload /pack > load.js"
@@ -75,7 +102,8 @@ jobs:
           for f in qemu-system-x86_64.wasm qemu-system-x86_64.worker.js qemu-system-x86_64.data load.js; do
             docker cp build-qemu-wasm:/build/$f site/$f
           done
-          cp web/index.html web/module.js site/
+          cp web/index.html site/
+          cp web/module-snap.js site/module.js
           npm install --no-audit --no-fund xterm@5.3.0 xterm-pty@0.10.1
           cp node_modules/xterm/lib/xterm.js site/vendor/xterm.js
           cp node_modules/xterm/css/xterm.css site/vendor/xterm.css
@@ -83,34 +111,31 @@ jobs:
           {
             echo "## Sizes"
             echo '```'
-            echo "Arch installed (MB):      $(cat out/rootfs-installed-mb.txt | cut -f1)"
             ls -l --block-size=1M pack | awk 'NR>1{printf "%-28s %s MB\n",$9,$5}'
             ls -l --block-size=1M site | awk 'NR>1{printf "site/%-23s %s MB\n",$9,$5}'
             echo '```'
           } | tee report/sizes.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Headless Chrome boot test
+      - name: Headless Chrome - resume the snapshot in the browser build
         continue-on-error: true
         env:
+          MODE: snapshot
           BOOT_TIMEOUT_MIN: ${{ inputs.boot_timeout_min }}
         run: |
           npm install --no-audit --no-fund playwright
           npx playwright install --with-deps chromium
-          node scripts/ci-boot-test.mjs site 2>&1 | tee report/boot-test.log
+          node scripts/ci-boot-test.mjs site 2>&1 | tee report/browser-restore.log
           {
-            echo "## Boot test (headless Chromium, runner CPU)"
+            echo "## Browser restore test (headless Chromium, runner CPU)"
             echo '```'
-            tail -60 report/boot-test.log
+            tail -60 report/browser-restore.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload report and small site files
+      - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: arch-spike-report
+          name: arch-snapshot-report
           retention-days: 7
-          path: |
-            report/
-            site/index.html
-            site/module.js
+          path: report/
