@@ -38,7 +38,8 @@ const screen = () => page.evaluate(() => {
   for (let i = 0; i < b.length; i++) { const l = b.getLine(i); if (l) out.push(l.translateToString(true)); }
   return out.join('\n');
 });
-const checks = [
+const SNAP = process.env.MODE === 'snapshot';
+const checks = SNAP ? [['snapshot_command_answered', /SNAP-OK-42/]] : [
   ['first_output', /\S/],
   ['kernel_started', /Linux version|Booting|Decompressing/i],
   ['systemd_started', /systemd\[1\]|Welcome to|Starting|Reached target/i],
@@ -49,13 +50,17 @@ let lastLog = 0;
 while ((Date.now() - t0) / 60000 < limitMin) {
   text = await screen();
   for (const [name, re] of checks) if (!marks[name] && re.test(text)) { marks[name] = sec(); console.log(`[${sec()}s] MARK ${name}`); }
-  if (marks.login_prompt_or_shell) break;
+  if (SNAP && !marks.snapshot_command_answered && Date.now() - (globalThis.__lastNudge || 0) > 15000) {
+    globalThis.__lastNudge = Date.now();
+    await page.evaluate(() => window.term && window.term.paste('\recho SNAP-OK-$((6*7))\r'));
+  }
+  if (marks.login_prompt_or_shell || marks.snapshot_command_answered) break;
   if (Date.now() - lastLog > 60000) { lastLog = Date.now(); console.log(`[${sec()}s] still booting; last line: ${text.trim().split('\n').pop().slice(0, 120)}`); }
   await new Promise(r => setTimeout(r, 2000));
 }
 console.log('--- SCREEN (last 40 lines) ---');
 console.log(text.split('\n').slice(-40).join('\n'));
 console.log('--- RESULT ---');
-console.log(JSON.stringify({ marks, booted: !!marks.login_prompt_or_shell, total_seconds: sec() }));
+console.log(JSON.stringify({ marks, booted: !!(marks.login_prompt_or_shell || marks.snapshot_command_answered), total_seconds: sec() }));
 await browser.close(); server.close();
-process.exit(marks.login_prompt_or_shell ? 0 : 1);
+process.exit((marks.login_prompt_or_shell || marks.snapshot_command_answered) ? 0 : 1);
