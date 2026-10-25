@@ -69,8 +69,10 @@ try:
 
     log('== 1. native boot of stock Arch (TCG, no KVM) ==')
     vm = VM(machine_args(DISK), '/tmp/q1.sock')
-    t_boot = vm.wait_for(r'\[root@[^\]]+\]#', 1500)
-    log(f'login shell reached after {t_boot:.1f}s')
+    t_login = vm.wait_for(r'archlinux login:', 1500)
+    log(f'login prompt reached after {t_login:.1f}s')
+    t_boot = vm.wait_for(r'\[root@[^\]]+\]#', 180)
+    log(f'root shell reached after {t_boot:.1f}s')
     vm.send('echo PRE-SNAP-$((6*7)); sync\r'); vm.wait_for(r'PRE-SNAP-42', 60); time.sleep(3)
     log('free memory in guest:'); vm.send('free -m\r'); time.sleep(2); log(vm.text()[-400:])
 
