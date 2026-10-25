@@ -28,7 +28,7 @@ mkdir -p /out/root/etc/systemd/system/serial-getty@ttyS0.service.d
 cat > /out/root/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf <<'UNIT'
 [Service]
 ExecStart=
-ExecStart=-/sbin/agetty -o '-p -- \\u' --autologin root --noclear --keep-baud 115200,38400,9600 %I $TERM
+ExecStart=-/sbin/agetty -o '-p -f -- \\u' --autologin root --noclear --keep-baud 115200,38400,9600 %I $TERM
 UNIT
 
 # Network (not used in the first spike, but standard archinstall-style config)
