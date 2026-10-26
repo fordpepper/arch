@@ -5,9 +5,9 @@ on:
       trim:
         description: "Skip man pages/docs/translations to shrink the image (1 = yes, 0 = stock)"
         default: "1"
-      drop_firmware:
-        description: "Remove hardware firmware packages (useless in a VM) to shrink the disk (1 = yes, 0 = keep)"
-        default: "1"
+      free_mb:
+        description: "Free space to leave inside the Arch disk, in MB (room for pacman installs)"
+        default: "300"
       boot_timeout_min:
         description: "Minutes to wait for the browser to resume the snapshot"
         default: "30"
@@ -57,12 +57,12 @@ jobs:
       - name: Build the stock Arch Linux root filesystem (official archlinux image)
         run: |
           mkdir -p out
-          docker run --rm --privileged -e TRIM="${{ inputs.trim }}" -e DROP_FIRMWARE="${{ inputs.drop_firmware }}" \
+          docker run --rm --privileged -e TRIM="${{ inputs.trim }}" \
             -v "$PWD/out:/out" -v "$PWD/scripts:/scripts:ro" \
             archlinux:latest bash /scripts/build-arch-rootfs.sh
           sudo du -sm out/root | tee out/rootfs-installed-mb.txt
           MB=$(cut -f1 out/rootfs-installed-mb.txt)
-          SIZE=$(( MB * 12 / 10 + 64 ))
+          SIZE=$(( MB + ${{ inputs.free_mb }} ))
           sudo mke2fs -q -t ext4 -d out/root -F -L archroot out/rootfs.img "${SIZE}M"
           sudo chown -R "$USER" out
           ls -la out
@@ -124,7 +124,7 @@ jobs:
               echo
             done
             echo '```'
-          } | tee report/sizes.md >> "$GITHUB_STEP_SUMMARY"
+          } | tee report/sizes.md | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Headless Chrome - resume the snapshot in the browser build
         continue-on-error: true
