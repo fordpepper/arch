@@ -17,10 +17,10 @@ def log(*a):
 
 def machine_args(disk):
     # MUST stay identical to web/module-snap.js (same devices, same RAM, same kernel args)
-    return [Q, '-nographic', '-m', '1024M', '-accel', 'tcg,tb-size=500', '-L', BIOS, '-nic', 'none',
+    return [Q, '-nographic', '-m', '512M', '-accel', 'tcg,tb-size=500', '-L', BIOS, '-nic', 'none',
             '-drive', f'if=virtio,format=raw,file={disk}',
             '-kernel', KERNEL, '-initrd', INITRD,
-            '-append', 'console=ttyS0,115200n8 root=/dev/vda rw rootwait loglevel=4']
+            '-append', 'console=ttyS0,115200n8 root=/dev/vda rw rootwait loglevel=4 init_on_free=1']
 
 class VM:
     def __init__(self, args, sock):
@@ -73,7 +73,7 @@ try:
     log(f'login prompt reached after {t_login:.1f}s')
     t_boot = vm.wait_for(r'\[root@[^\]]+\]#', 180)
     log(f'root shell reached after {t_boot:.1f}s')
-    vm.send('echo PRE-SNAP-$((6*7)); sync\r'); vm.wait_for(r'PRE-SNAP-42', 60); time.sleep(3)
+    vm.send('sync; echo 3 > /proc/sys/vm/drop_caches; echo PRE-SNAP-$((6*7))\r'); vm.wait_for(r'PRE-SNAP-42', 60); time.sleep(5)
     log('free memory in guest:'); vm.send('free -m\r'); time.sleep(2); log(vm.text()[-400:])
 
     log('== 2. save machine state (migrate to file) ==')
