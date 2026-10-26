@@ -5,6 +5,9 @@ on:
       trim:
         description: "Skip man pages/docs/translations to shrink the image (1 = yes, 0 = stock)"
         default: "1"
+      drop_firmware:
+        description: "Remove hardware firmware packages (useless in a VM) to shrink the disk (1 = yes, 0 = keep)"
+        default: "1"
       boot_timeout_min:
         description: "Minutes to wait for the browser to resume the snapshot"
         default: "30"
@@ -54,7 +57,7 @@ jobs:
       - name: Build the stock Arch Linux root filesystem (official archlinux image)
         run: |
           mkdir -p out
-          docker run --rm --privileged -e TRIM="${{ inputs.trim }}" \
+          docker run --rm --privileged -e TRIM="${{ inputs.trim }}" -e DROP_FIRMWARE="${{ inputs.drop_firmware }}" \
             -v "$PWD/out:/out" -v "$PWD/scripts:/scripts:ro" \
             archlinux:latest bash /scripts/build-arch-rootfs.sh
           sudo du -sm out/root | tee out/rootfs-installed-mb.txt
@@ -113,6 +116,13 @@ jobs:
             echo '```'
             ls -l --block-size=1M pack | awk 'NR>1{printf "%-28s %s MB\n",$9,$5}'
             ls -l --block-size=1M site | awk 'NR>1{printf "site/%-23s %s MB\n",$9,$5}'
+            echo
+            echo "Compressed size (what a visitor would download if the host compresses):"
+            for f in pack/rootfs.img pack/state.bin; do
+              printf "%-18s gzip-6: %s MB" "$f" "$(( $(gzip -6 -c "$f" | wc -c) / 1048576 ))"
+              if command -v zstd >/dev/null; then printf "   zstd-3: %s MB" "$(( $(zstd -3 -T0 -c "$f" | wc -c) / 1048576 ))"; fi
+              echo
+            done
             echo '```'
           } | tee report/sizes.md >> "$GITHUB_STEP_SUMMARY"
 
