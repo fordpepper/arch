@@ -72,10 +72,10 @@ jobs:
           sudo chown -R "$USER" qemu-wasm
           git config --global --add safe.directory '*'
           sudo apt-get update
-          sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev python3-venv flex bison git
+          sudo apt-get install -y ninja-build libglib2.0-dev libpixman-1-dev python3-venv flex bison git libcap-ng-dev libattr1-dev
           mkdir native-build && cd native-build
           ../qemu-wasm/configure --target-list=x86_64-softmmu --without-default-features \
-            --enable-system --enable-tcg --with-coroutine=ucontext --disable-docs
+            --enable-system --enable-tcg --enable-virtfs --with-coroutine=ucontext --disable-docs
           make -j"$(nproc)" qemu-system-x86_64
           ls -la qemu-system-x86_64
 
