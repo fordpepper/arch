@@ -1,0 +1,26 @@
+name: cors-probe
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check which sites a browser page may fetch from
+        run: |
+          mkdir -p report
+          python3 scripts/cors-probe.py | tee report/cors-probe.txt
+          {
+            echo "## CORS probe"
+            echo '```'
+            cat report/cors-probe.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cors-probe
+          retention-days: 7
+          path: report/
