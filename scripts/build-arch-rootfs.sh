@@ -18,12 +18,10 @@ pacstrap -K /out/root base linux
 
 echo "=== SIZE BREAKDOWN of the installed system (MB) ==="
 du -xm --max-depth=2 /out/root 2>/dev/null | sort -rn | head -25
-if [ "${DROP_FIRMWARE:-0}" = 1 ]; then
-  # A VM has no real hardware, so hardware firmware blobs are dead weight.
-  arch-chroot /out/root bash -c 'pacman -Qq | grep "^linux-firmware" | xargs -r pacman -Rdd --noconfirm' || true
-  echo "=== after removing firmware packages ==="
-  du -xsm /out/root
-fi
+# pacstrap leaves ~285 MB of downloaded package files in the new system; pacman re-downloads them when needed.
+rm -rf /out/root/var/cache/pacman/pkg/*
+echo "=== after clearing the pacman download cache ==="
+du -xsm /out/root
 
 # Normal post-install configuration (what archinstall would also do)
 echo archlinux > /out/root/etc/hostname
