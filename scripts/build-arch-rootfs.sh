@@ -16,6 +16,15 @@ pacman-key --populate archlinux
 rm -rf /out/root && mkdir -p /out/root
 pacstrap -K /out/root base linux
 
+echo "=== SIZE BREAKDOWN of the installed system (MB) ==="
+du -xm --max-depth=2 /out/root 2>/dev/null | sort -rn | head -25
+if [ "${DROP_FIRMWARE:-0}" = 1 ]; then
+  # A VM has no real hardware, so hardware firmware blobs are dead weight.
+  arch-chroot /out/root bash -c 'pacman -Qq | grep "^linux-firmware" | xargs -r pacman -Rdd --noconfirm' || true
+  echo "=== after removing firmware packages ==="
+  du -xsm /out/root
+fi
+
 # Normal post-install configuration (what archinstall would also do)
 echo archlinux > /out/root/etc/hostname
 echo 'LANG=en_US.UTF-8' > /out/root/etc/locale.conf
