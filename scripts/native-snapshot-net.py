@@ -95,6 +95,11 @@ try:
     t_boot = vm.wait_for(r'\[root@[^\]]+\]#', 180)
     log(f'root shell reached after {t_boot:.1f}s')
     vm.send('sync; echo 3 > /proc/sys/vm/drop_caches; echo PRE-SNAP-$((6*7))\r'); vm.wait_for(r'PRE-SNAP-42', 60); time.sleep(5)
+    log('== speed baselines (native TCG; the browser run repeats these) ==')
+    vm.send('time ( i=0; while [ $i -lt 100000 ]; do i=$((i+1)); done ); echo NB1-$((6*7))\r'); vm.wait_for(r'NB1-42', 300)
+    log('shell loop of 100000 iterations:', ' '.join(re.findall(r'real\s+\S+', vm.text()[-600:])[-1:]))
+    vm.send('time pacman -Si nano > /dev/null; echo NB2-$((6*7))\r'); vm.wait_for(r'NB2-42', 600)
+    log('pacman -Si nano (loads the package databases):', ' '.join(re.findall(r'real\s+\S+', vm.text()[-600:])[-1:]))
     log('free memory in guest:'); vm.send('free -m\r'); time.sleep(2); log(vm.text()[-400:])
 
     log('== 2. save machine state (migrate to file) ==')
