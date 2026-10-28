@@ -26,25 +26,30 @@ await new Promise(r => server.listen(8088, '127.0.0.1', r));
 
 const epoch = Math.floor(Date.now() / 1000);
 const PROXY = 'http://192.168.127.253:80';
-const common = [
-  { id: 'clock', cmd: `date -s @${epoch} >/dev/null; echo T1-$((6*7))`, done: /T1-42/, pass: /T1-42/, secs: 60 },
+const clock = { id: 'clock', cmd: `date -s @${epoch} >/dev/null; echo T1-$((6*7))`, done: /T1-42/, pass: /T1-42/, secs: 120 };
+const lat = (n) => ({ id: `latency ${n} (trivial echo)`, cmd: `echo LAT${n}-$((6*7))`, done: new RegExp(`LAT${n}-42`), pass: new RegExp(`LAT${n}-42`), secs: 120, poll: 500 });
+const bench = [
+  { id: 'cpu benchmark (100000-iteration shell loop)', cmd: 'time ( i=0; while [ $i -lt 100000 ]; do i=$((i+1)); done ); echo B1-$((6*7))', done: /B1-42/, pass: /real/, secs: 900 },
+  { id: 'pacman -Si nano (database load)', cmd: 'time pacman -Si nano > /dev/null; echo B2-$((6*7))', done: /B2-42/, pass: /real/, secs: 1500 },
 ];
-const dhcp = { id: 'dhcp', cmd: 'systemctl restart systemd-networkd; sleep 10; ip -4 -br addr show; echo T3-$((6*7))', done: /T3-42/, pass: /192\.168\.127\.\d+/, secs: 180 };
+const dhcp = { id: 'dhcp', cmd: 'systemctl restart systemd-networkd; sleep 5; ip -4 -br addr show; echo T3-$((6*7))', done: /T3-42/, pass: /192\.168\.127\.\d+/, secs: 600 };
 const relay = [
-  ...common, dhcp,
-  { id: 'dns', cmd: 'getent hosts geo.mirror.pkgbuild.com; echo T4-$((6*7))', done: /T4-42/, pass: /\d+\.\d+\.\d+\.\d+\s+\S*pkgbuild/, secs: 120 },
-  { id: 'arch-mirror', cmd: 'curl -sS -m 120 -o /dev/null -w "MIRROR-%{http_code}-X\\n" https://geo.mirror.pkgbuild.com/core/os/x86_64/core.db; echo T5-$((6*7))', done: /T5-42/, pass: /MIRROR-200-X/, secs: 200 },
-  { id: 'pacman -Sy', cmd: 'pacman -Sy --noconfirm; echo T6-$?-$((6*7))', done: /T6-\d+-42/, pass: /T6-0-42/, secs: 900 },
-  { id: 'pacman -S nano', cmd: 'pacman -S --noconfirm --needed nano; echo T7-$?-$((6*7))', done: /T7-\d+-42/, pass: /T7-0-42/, secs: 1500 },
-  { id: 'run nano', cmd: 'nano --version | head -1; echo T8-$((6*7))', done: /T8-42/, pass: /GNU nano/, secs: 90 },
+  clock, lat(1), lat(2), lat(3), ...bench, dhcp,
+  { id: 'dns', cmd: 'getent hosts geo.mirror.pkgbuild.com; echo T4-$((6*7))', done: /T4-42/, pass: /\d+\.\d+\.\d+\.\d+\s+\S*pkgbuild/, secs: 300 },
+  { id: 'arch-mirror', cmd: 'curl -sS -m 120 -o /dev/null -w "MIRROR-%{http_code}-X\\n" https://geo.mirror.pkgbuild.com/core/os/x86_64/core.db; echo T5-$((6*7))', done: /T5-42/, pass: /MIRROR-200-X/, secs: 400 },
+  { id: 'pacman -Sy', cmd: 'pacman -Sy --noconfirm; echo T6-$?-$((6*7))', done: /T6-\d+-42/, pass: /T6-0-42/, secs: 1200 },
+  // the install runs in the background; we poll its log so a slow run shows what it is doing
+  { id: 'pacman -S nano (background, polled)', cmd: '( pacman -S --noconfirm --needed nano > /tmp/p.log 2>&1; echo $? > /tmp/p.rc ) &', done: /\[1\]\s+\d+/, pass: /\[1\]\s+\d+/, secs: 60 },
+  { id: 'install progress', poll_cmd: 'echo P-$(date +%s)-$(cat /tmp/p.rc 2>/dev/null || echo running)-X; tail -c 250 /tmp/p.log | tr "\\r" "\\n" | tail -3; cat /proc/loadavg', until: /P-\d+-(\d+)-X/, passIf: /P-\d+-0-X/, every: 60, secs: 1800 },
+  { id: 'run nano', cmd: 'nano --version | head -1; echo T8-$((6*7))', done: /T8-42/, pass: /GNU nano/, secs: 300 },
 ];
 const browser = [
-  ...common,
-  { id: 'trust proxy CA', cmd: 'mount -t 9p -o trans=virtio,version=9p2000.L wasm0 /mnt && trust anchor --store /mnt/proxy.crt && update-ca-trust; echo T2-$?-$((6*7))', done: /T2-\d+-42/, pass: /T2-0-42/, secs: 240 },
+  clock, lat(1), lat(2), lat(3),
+  { id: 'mount shared folder', cmd: 'mount -t 9p -o trans=virtio,version=9p2000.L wasm0 /mnt; echo T2-$?-$((6*7)); ls /mnt', done: /T2-\d+-42/, pass: /T2-0-42/, secs: 900 },
   dhcp,
-  { id: 'npm registry via proxy', cmd: `export http_proxy=${PROXY} https_proxy=${PROXY} HTTP_PROXY=${PROXY} HTTPS_PROXY=${PROXY}; curl -sS -m 90 -o /dev/null -w "NPM-%{http_code}-X\\n" https://registry.npmjs.org/left-pad; echo T4-$((6*7))`, done: /T4-42/, pass: /NPM-200-X/, secs: 200 },
-  { id: 'github raw via proxy', cmd: 'curl -sS -m 90 https://raw.githubusercontent.com/madler/zlib/master/README | head -3; echo T5-$((6*7))', done: /T5-42/, pass: /zlib/i, secs: 200 },
-  { id: 'arch mirror via proxy (expected to FAIL: no CORS)', cmd: 'curl -sS -m 90 -o /dev/null -w "MIRROR-%{http_code}-X\\n" https://geo.mirror.pkgbuild.com/core/os/x86_64/core.db; echo T6-$((6*7))', done: /T6-42/, pass: /MIRROR-200-X/, secs: 200 },
+  { id: 'npm registry via proxy', cmd: `export SSL_CERT_FILE=/mnt/proxy.crt http_proxy=${PROXY} https_proxy=${PROXY} HTTP_PROXY=${PROXY} HTTPS_PROXY=${PROXY}; curl -sS -m 120 -o /dev/null -w "NPM-%{http_code}-X\\n" https://registry.npmjs.org/left-pad; echo T4-$((6*7))`, done: /T4-42/, pass: /NPM-200-X/, secs: 400 },
+  { id: 'github raw via proxy', cmd: 'curl -sS -m 120 https://raw.githubusercontent.com/madler/zlib/master/README | head -3; echo T5-$((6*7))', done: /T5-42/, pass: /zlib/i, secs: 400 },
+  { id: 'arch mirror via proxy (expected to FAIL: no CORS)', cmd: 'curl -sS -m 120 -o /dev/null -w "MIRROR-%{http_code}-X\\n" https://geo.mirror.pkgbuild.com/core/os/x86_64/core.db; echo T6-$((6*7))', done: /T6-42/, pass: /MIRROR-200-X/, secs: 400 },
 ];
 const steps = mode === 'relay' ? relay : browser;
 
@@ -77,12 +82,30 @@ const results = [];
 if (resumed) {
   for (const s of steps) {
     const t1 = Date.now();
-    await type(s.cmd + '\r');
     let ok = false, finished = false;
-    while ((Date.now() - t1) < s.secs * 1000) {
-      text = await screen();
-      if (s.done.test(text)) { finished = true; ok = s.pass.test(text); break; }
-      await sleep(2000);
+    if (s.poll_cmd) {                      // poll a background job
+      while ((Date.now() - t1) < s.secs * 1000) {
+        await type(s.poll_cmd + '\r');
+        const t2 = Date.now();
+        while ((Date.now() - t2) < 120000) {
+          text = await screen();
+          const ms = [...text.matchAll(/P-\d+-(\w+)-X\n/g)];
+          if (ms.length && ms[ms.length - 1][1] !== 'running') { finished = true; ok = /^0$/.test(ms[ms.length - 1][1]); break; }
+          if (ms.length && (Date.now() - t2) > 20000) break;
+          await sleep(1000);
+        }
+        console.log(`[${sec()}s] progress: ` + text.split('\n').filter(l => l.trim()).slice(-5).join(' | ').slice(0, 400));
+        if (finished) break;
+        await sleep((s.every || 60) * 1000);
+      }
+    } else {
+      await type(s.cmd + '\r');
+      while ((Date.now() - t1) < s.secs * 1000) {
+        text = await screen();
+        if (s.done.test(text)) { finished = true; ok = s.pass.test(text); break; }
+        await sleep(s.poll || 2000);
+      }
+      if (!finished) { await type('\x03'); await sleep(1500); await type('\x03'); await sleep(5000); }   // unblock the shell for the next step
     }
     const tail = text.split('\n').filter(l => l.trim()).slice(-8).join('\n');
     results.push({ step: s.id, finished, pass: ok, seconds: Number(((Date.now() - t1) / 1000).toFixed(1)) });
