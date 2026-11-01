@@ -1,0 +1,51 @@
+name: arch32-probe
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Is Arch Linux 32 alive, and can CI download from it?
+        run: |
+          mkdir -p report
+          UA_BROWSER='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+          code() { curl -s -o /dev/null -L -m 40 -A "$2" -w '%{http_code}' "$1"; }
+          {
+            echo "== reachability (HTTP status; default curl UA / browser UA) =="
+            for u in \
+              https://www.archlinux32.org/ \
+              https://news.archlinux32.org/ \
+              https://mirror.archlinux32.org/archisos/ \
+              https://mirror.archlinux32.org/pentium4/core/core.db \
+              https://mirror.archlinux32.org/i686/core/core.db \
+              https://mirror.archlinux32.org/i486/core/core.db \
+              https://de.mirror.archlinux32.org/pentium4/core/core.db \
+              https://archlinux32.mirror.roelf.org/pentium4/core/core.db \
+              http://32.arlm.tyzoid.com/pentium4/core/core.db ; do
+              printf '%-62s %s / %s\n' "$u" "$(code "$u" curl/8)" "$(code "$u" "$UA_BROWSER")"
+            done
+            echo
+            echo "== ISO directory listing =="
+            curl -s -L -m 40 -A "$UA_BROWSER" https://mirror.archlinux32.org/archisos/ | grep -o 'href="[^"]*"' | sed 's/href=//' | tr -d '"' | tail -25
+            echo
+            echo "== news page: most recent entries =="
+            curl -s -L -m 40 -A "$UA_BROWSER" https://news.archlinux32.org/ | sed 's/<[^>]*>/ /g' | grep -E '20[0-9]{2}-[0-9]{2}-[0-9]{2}' | head -8
+            echo
+            echo "== package database size (pentium4 core) =="
+            curl -s -L -m 60 -A "$UA_BROWSER" -o /tmp/core.db -w 'HTTP %{http_code}, %{size_download} bytes\n' https://mirror.archlinux32.org/pentium4/core/core.db || true
+            ls -la /tmp/core.db 2>/dev/null && (tar tf /tmp/core.db 2>/dev/null | grep -E '^(linux|pacman|base|glibc|systemd)-[0-9]' | head -12)
+            echo
+            echo "== download speed test: first 20 MB of newest ISO =="
+            ISO=$(curl -s -L -m 40 -A "$UA_BROWSER" https://mirror.archlinux32.org/archisos/ | grep -o 'archlinux32-[0-9.]*-i686.iso"' | tr -d '"' | sort -V | tail -1)
+            echo "newest i686 ISO: ${ISO:-none found}"
+            [ -n "$ISO" ] && curl -s -L -m 120 -A "$UA_BROWSER" -r 0-20971519 -o /dev/null -w 'HTTP %{http_code}, %{size_download} bytes in %{time_total}s\n' "https://mirror.archlinux32.org/archisos/$ISO"
+          } 2>&1 | tee report/arch32-probe.txt
+          { echo "## Arch Linux 32 probe"; echo '```'; cat report/arch32-probe.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arch32-probe
+          retention-days: 7
+          path: report/
